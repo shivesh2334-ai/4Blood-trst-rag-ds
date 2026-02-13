@@ -3,20 +3,26 @@ import os
 import json
 from typing import Dict, List, Any
 
+
 # FIXED: Updated imports for newer langchain versions
 try:
     from langchain_community.embeddings import HuggingFaceEmbeddings
     from langchain_community.vectorstores import FAISS
-    from langchain_community.document_loaders import TextLoader
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 except ImportError:
     try:
         from langchain.embeddings import HuggingFaceEmbeddings
         from langchain.vectorstores import FAISS
-        from langchain.document_loaders import TextLoader
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
     except ImportError:
-        HuggingFaceEmbeddings = None
-        FAISS = None
-        TextLoader = None
+        try:
+            from langchain.schema.document import Document
+            
+        except ImportError:
+            HuggingFaceEmbeddings = None
+            FAISS = None
+            RecursiveCharacterTextSplitter = None
+
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
