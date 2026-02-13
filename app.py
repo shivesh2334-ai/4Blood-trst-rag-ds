@@ -13,6 +13,13 @@ from datetime import datetime
 import base64
 from typing import Dict, List, Tuple, Optional
 import hashlib
+# Configure poppler path for different environments
+import os
+if os.path.exists("/usr/bin/pdftoppm"):
+    os.environ["PATH"] += os.pathsep + "/usr/bin"
+elif os.path.exists("/usr/local/bin/pdftoppm"):
+    os.environ["PATH"] += os.pathsep + "/usr/local/bin"
+    
 
 # FIXED: Updated langchain imports for newer versions
 # FIXED: Updated langchain imports for newer versions
@@ -77,7 +84,28 @@ if 'analysis_history' not in st.session_state:
     st.session_state.analysis_history = []
 if 'current_category' not in st.session_state:
     st.session_state.current_category = "all"
-
+def extract_text_from_document(uploaded_file):
+    """Extract text from various document formats"""
+    text = ""
+    try:
+        if uploaded_file.type == "application/pdf":
+            try:
+                images = pdf2image.convert_from_bytes(uploaded_file.read())
+                for img in images:
+                    text += pytesseract.image_to_string(img) + "\n"
+            except Exception as pdf_error:
+                if "poppler" in str(pdf_error).lower() or "page count" in str(pdf_error).lower():
+                    st.error("⚠️ PDF processing requires poppler. Please enter values manually or upload an image.")
+                    return ""
+                raise pdf_error
+        else:
+            image = Image.open(uploaded_file)
+            text = pytesseract.image_to_string(image)
+        return text
+    except Exception as e:
+        st.error(f"Error processing document: {str(e)}")
+        return ""
+        
 # Custom CSS
 st.markdown("""
 <style>
