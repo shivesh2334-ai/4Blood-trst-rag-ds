@@ -16,20 +16,36 @@ import hashlib
 
 # FIXED: Updated langchain imports for newer versions
 try:
+    # FIXED: Updated langchain imports for newer versions
+try:
     from langchain_community.embeddings import HuggingFaceEmbeddings
     from langchain_community.vectorstores import FAISS
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain.chains import RetrievalQA
+    from langchain.prompts import PromptTemplate
 except ImportError:
     try:
         from langchain.embeddings import HuggingFaceEmbeddings
         from langchain.vectorstores import FAISS
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain.chains import RetrievalQA
+        from langchain.prompts import PromptTemplate
     except ImportError:
         # Fallback if langchain not installed
         HuggingFaceEmbeddings = None
         FAISS = None
+        RecursiveCharacterTextSplitter = None
+        RetrievalQA = None
+        PromptTemplate = None
+
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
+try:
+    from langchain.chains import RetrievalQA
+    from langchain.prompts import PromptTemplate
+except ImportError:
+    RetrievalQA = None
+    PromptTemplate = None
 
 # Configure page
 st.set_page_config(
