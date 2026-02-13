@@ -1,4 +1,4 @@
-# app.py
+# app.py - FIXED VERSION
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -13,17 +13,23 @@ from datetime import datetime
 import base64
 from typing import Dict, List, Tuple, Optional
 import hashlib
-import sqlite3
 
-# RAG imports
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
+# FIXED: Updated langchain imports for newer versions
+try:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
+    from langchain_community.vectorstores import FAISS
+except ImportError:
+    try:
+        from langchain.embeddings import HuggingFaceEmbeddings
+        from langchain.vectorstores import FAISS
+    except ImportError:
+        # Fallback if langchain not installed
+        HuggingFaceEmbeddings = None
+        FAISS = None
+
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
-from langchain.llms import HuggingFaceHub
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
 # Configure page
 st.set_page_config(
@@ -154,14 +160,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Import reference data and RAG components
+# Import reference data
 from medical_reference import REFERENCE_RANGES, TEST_CATEGORIES, CRITICAL_VALUES
-from rag_components import MedLabRAG
 
-# Initialize RAG system
+# Initialize RAG system with error handling
 @st.cache_resource
 def get_rag_system():
-    return MedLabRAG()
+    try:
+        from rag_components import MedLabRAG
+        return MedLabRAG()
+    except Exception as e:
+        st.warning(f"RAG system initialization failed: {e}. Running in basic mode.")
+        return None
 
 rag_system = get_rag_system()
 
@@ -188,7 +198,7 @@ def parse_lab_values(text: str) -> Dict:
     # Comprehensive patterns for all test types
     patterns = {
         # Hematology
-        'RBC': r'(?:RBC|Red Blood Cell)[\s:]*(\d+\.?\d*)\s*(?:x?10\^?12|million)',
+        'RBC': r'(?:RBC|Red Blood Cell)[\s:]*(\d+\.?\d*)\s*(?:x?10\^?12|million)?',
         'Hemoglobin': r'(?:Hemoglobin|Hb|HGB)[\s:]*(\d+\.?\d*)\s*(?:g/dL|g/L)?',
         'Hematocrit': r'(?:Hematocrit|Hct|HCT)[\s:]*(\d+\.?\d*)\s*%?',
         'MCV': r'(?:MCV)[\s:]*(\d+\.?\d*)\s*(?:fL)?',
@@ -265,14 +275,6 @@ def parse_lab_values(text: str) -> Dict:
         'CRP': r'(?:CRP|C-Reactive Protein)[\s:]*(\d+\.?\d*)\s*(?:mg/L)?',
         'ASO': r'(?:ASO|Anti-Streptolysin O)[\s:]*(\d+\.?\d*)\s*(?:IU/mL)?',
         
-        # Connective Tissue
-        'Anti_Sm': r'(?:Anti-Smith|Sm Antibody)[\s:]*(\w+)',
-        'Anti_RNP': r'(?:Anti-RNP|RNP Antibody)[\s:]*(\w+)',
-        'Anti_SSA': r'(?:Anti-SSA|SSA|Ro)[\s:]*(\w+)',
-        'Anti_SSB': r'(?:Anti-SSB|SSB|La)[\s:]*(\w+)',
-        'Anti_Scl_70': r'(?:Anti-Scl-70|Scl-70)[\s:]*(\w+)',
-        'Anti_Jo1': r'(?:Anti-Jo-1|Jo-1)[\s:]*(\w+)',
-        
         # Coagulation
         'PT': r'(?:PT|Prothrombin Time)[\s:]*(\d+\.?\d*)\s*(?:seconds)?',
         'INR': r'(?:INR|International Normalized Ratio)[\s:]*(\d+\.?\d*)',
@@ -339,8 +341,7 @@ def categorize_tests(tests: Dict) -> Dict[str, Dict]:
         'Metabolic': ['Glucose_Fasting', 'Glucose_Random', 'HbA1c', 'Insulin', 'C_Peptide'],
         'Endocrine': ['TSH', 'T3', 'T4', 'Free_T3', 'Free_T4', 'Anti_TPO', 'Anti_Thyroglobulin'],
         'Lipid_Profile': ['Total_Cholesterol', 'HDL', 'LDL', 'Triglycerides', 'VLDL', 'Non_HDL_Cholesterol'],
-        'Immunology_Rheumatology': ['RF', 'Anti_CCP', 'ANA', 'dsDNA', 'ESR', 'CRP', 'ASO',
-                                   'Anti_Sm', 'Anti_RNP', 'Anti_SSA', 'Anti_SSB', 'Anti_Scl_70', 'Anti_Jo1'],
+        'Immunology_Rheumatology': ['RF', 'Anti_CCP', 'ANA', 'dsDNA', 'ESR', 'CRP', 'ASO'],
         'Coagulation': ['PT', 'INR', 'aPTT', 'Fibrinogen', 'D_Dimer'],
         'Tumor_Markers': ['AFP', 'CEA', 'CA_125', 'CA_19_9', 'PSA', 'CA_15_3'],
         'Vitamins_Minerals': ['Vitamin_D', 'Vitamin_B12', 'Folate', 'Iron', 'Ferritin', 'TIBC', 'Transferrin_Saturation']
@@ -434,114 +435,6 @@ def display_parameter_card(test: str, value, category: str, gender: str = 'male'
                 del st.session_state.parsed_values[test]
                 st.rerun()
 
-def generate_comprehensive_analysis(categorized_tests: Dict, gender: str, age: int) -> Dict:
-    """Generate comprehensive analysis using RAG and rule-based systems"""
-    analysis = {
-        'summary': [],
-        'categories': {},
-        'diagnoses': [],
-        'next_steps': [],
-        'critical_alerts': []
-    }
-    
-    # Check critical values
-    all_values = {}
-    for cat_tests in categorized_tests.values():
-        all_values.update(cat_tests)
-    
-    criticals = check_critical_values(all_values)
-    if criticals:
-        analysis['critical_alerts'] = criticals
-    
-    # Category-specific analysis
-    for category, tests in categorized_tests.items():
-        if not tests:
-            continue
-            
-        cat_analysis = analyze_category(category, tests, gender, age)
-        analysis['categories'][category] = cat_analysis
-        
-        if cat_analysis.get('abnormalities'):
-            analysis['summary'].append(f"{category.replace('_', ' ')}: {len(cat_analysis['abnormalities'])} abnormal parameters")
-    
-    # Cross-category pattern recognition
-    analysis['diagnoses'] = generate_differential_diagnosis(categorized_tests, gender, age)
-    analysis['next_steps'] = generate_recommendations(categorized_tests, analysis['diagnoses'])
-    
-    # RAG-enhanced analysis
-    try:
-        rag_analysis = rag_system.enhance_analysis(categorized_tests, analysis)
-        analysis['rag_insights'] = rag_analysis
-    except Exception as e:
-        analysis['rag_insights'] = "RAG analysis temporarily unavailable"
-    
-    return analysis
-
-def analyze_category(category: str, tests: Dict, gender: str, age: int) -> Dict:
-    """Analyze tests within a specific category"""
-    result = {
-        'abnormalities': [],
-        'patterns': [],
-        'interpretation': ''
-    }
-    
-    abnormal_count = 0
-    
-    for test, value in tests.items():
-        if not isinstance(value, (int, float)):
-            continue
-            
-        if test in REFERENCE_RANGES:
-            if 'male' in REFERENCE_RANGES[test]:
-                low, high = REFERENCE_RANGES[test][gender]
-            else:
-                low, high = REFERENCE_RANGES[test]['range']
-            
-            if value < low or value > high:
-                abnormal_count += 1
-                direction = 'low' if value < low else 'high'
-                result['abnormalities'].append({
-                    'test': test,
-                    'value': value,
-                    'direction': direction,
-                    'severity': calculate_severity(test, value, low, high)
-                })
-    
-    # Pattern recognition within category
-    if category == 'Hematology':
-        result['patterns'] = analyze_hematology_patterns(tests)
-    elif category == 'Liver_Function':
-        result['patterns'] = analyze_liver_patterns(tests)
-    elif category == 'Kidney_Function':
-        result['patterns'] = analyze_kidney_patterns(tests)
-    elif category == 'Metabolic':
-        result['patterns'] = analyze_metabolic_patterns(tests)
-    elif category == 'Endocrine':
-        result['patterns'] = analyze_thyroid_patterns(tests)
-    elif category == 'Lipid_Profile':
-        result['patterns'] = analyze_lipid_patterns(tests)
-    elif category == 'Immunology_Rheumatology':
-        result['patterns'] = analyze_rheumatology_patterns(tests)
-    
-    return result
-
-def calculate_severity(test: str, value: float, low: float, high: float) -> str:
-    """Calculate severity of abnormal value"""
-    range_size = high - low
-    mid = (high + low) / 2
-    
-    if value < low:
-        deviation = (low - value) / range_size
-    else:
-        deviation = (value - high) / range_size
-    
-    if deviation < 0.5:
-        return 'mild'
-    elif deviation < 1.0:
-        return 'moderate'
-    else:
-        return 'severe'
-
 def analyze_hematology_patterns(tests: Dict) -> List[str]:
     """Recognize hematology patterns"""
     patterns = []
@@ -553,40 +446,40 @@ def analyze_hematology_patterns(tests: Dict) -> List[str]:
         
         if hgb < 12:
             if mcv < 80:
-                patterns.append("Microcytic anemia - consider iron deficiency, thalassemia, or anemia of chronic disease")
+                patterns.append("🔴 Microcytic anemia - consider iron deficiency, thalassemia, or anemia of chronic disease")
             elif mcv > 100:
-                patterns.append("Macrocytic anemia - consider B12/folate deficiency, liver disease, MDS, or hemolysis")
+                patterns.append("🔴 Macrocytic anemia - consider B12/folate deficiency, liver disease, MDS, or hemolysis")
             else:
-                patterns.append("Normocytic anemia - consider acute blood loss, hemolysis, or early iron deficiency")
+                patterns.append("🟡 Normocytic anemia - consider acute blood loss, hemolysis, or early iron deficiency")
     
     # RDW interpretation
     if 'RDW' in tests and tests['RDW'] > 14.5:
-        patterns.append("Elevated RDW suggests anisocytosis - seen in iron deficiency, mixed deficiencies, or post-transfusion")
+        patterns.append("📊 Elevated RDW suggests anisocytosis - seen in iron deficiency, mixed deficiencies, or post-transfusion")
     
     # Thrombocytopenia patterns
     if 'Platelets' in tests and tests['Platelets'] < 150:
         if 'MPV' in tests:
             if tests['MPV'] > 11.5:
-                patterns.append("Thrombocytopenia with high MPV suggests peripheral destruction (ITP, TTP)")
+                patterns.append("🔴 Thrombocytopenia with high MPV suggests peripheral destruction (ITP, TTP)")
             else:
-                patterns.append("Thrombocytopenia with normal/low MPV suggests bone marrow failure or sequestration")
+                patterns.append("🔴 Thrombocytopenia with normal/low MPV suggests bone marrow failure or sequestration")
         else:
-            patterns.append("Thrombocytopenia - verify with peripheral smear for pseudothrombocytopenia")
+            patterns.append("🟡 Thrombocytopenia - verify with peripheral smear for pseudothrombocytopenia")
     
     # Leukocytosis patterns
     if 'WBC' in tests:
         wbc = tests['WBC']
         if wbc > 11:
             if 'Neutrophils' in tests and tests['Neutrophils'] > 70:
-                patterns.append("Neutrophilic leukocytosis suggests bacterial infection, inflammation, or stress")
+                patterns.append("🟡 Neutrophilic leukocytosis suggests bacterial infection, inflammation, or stress")
             elif 'Lymphocytes' in tests and tests['Lymphocytes'] > 40:
-                patterns.append("Lymphocytosis suggests viral infection, lymphoid malignancy, or pertussis")
+                patterns.append("🟡 Lymphocytosis suggests viral infection, lymphoid malignancy, or pertussis")
         elif wbc < 4:
-            patterns.append("Leukopenia - increased infection risk, consider viral infection or bone marrow suppression")
+            patterns.append("🔴 Leukopenia - increased infection risk, consider viral infection or bone marrow suppression")
     
     # Blasts detection
     if 'Blasts' in tests and tests['Blasts'] > 0:
-        patterns.append(f"CRITICAL: {tests['Blasts']}% blasts detected - possible acute leukemia requiring immediate hematology referral")
+        patterns.append(f"🚨 CRITICAL: {tests['Blasts']}% blasts detected - possible acute leukemia requiring immediate hematology referral")
     
     return patterns
 
@@ -600,11 +493,11 @@ def analyze_liver_patterns(tests: Dict) -> List[str]:
         alp = tests['ALP']
         
         if alt > 40 and alp < 120:
-            patterns.append("Hepatocellular pattern - suggests viral hepatitis, drug-induced injury, or ischemic hepatitis")
+            patterns.append("🔴 Hepatocellular pattern - suggests viral hepatitis, drug-induced injury, or ischemic hepatitis")
         elif alp > 120 and alt < 40:
-            patterns.append("Cholestatic pattern - suggests biliary obstruction, primary biliary cholangitis, or drug-induced cholestasis")
+            patterns.append("🔴 Cholestatic pattern - suggests biliary obstruction, primary biliary cholangitis, or drug-induced cholestasis")
         elif alt > 40 and alp > 120:
-            patterns.append("Mixed hepatocellular-cholestatic pattern - suggests alcoholic hepatitis or acute viral hepatitis")
+            patterns.append("🟡 Mixed hepatocellular-cholestatic pattern - suggests alcoholic hepatitis or acute viral hepatitis")
     
     # Bilirubin fractionation
     if 'Total_Bilirubin' in tests and 'Direct_Bilirubin' in tests:
@@ -613,16 +506,16 @@ def analyze_liver_patterns(tests: Dict) -> List[str]:
         
         if total > 1.2:
             if direct / total > 0.5:
-                patterns.append("Conjugated hyperbilirubinemia - suggests hepatocellular disease or biliary obstruction")
+                patterns.append("🔴 Conjugated hyperbilirubinemia - suggests hepatocellular disease or biliary obstruction")
             else:
-                patterns.append("Unconjugated hyperbilirubinemia - suggests hemolysis, Gilbert syndrome, or ineffective erythropoiesis")
+                patterns.append("🟡 Unconjugated hyperbilirubinemia - suggests hemolysis, Gilbert syndrome, or ineffective erythropoiesis")
     
     # Synthetic function
     if 'Albumin' in tests and tests['Albumin'] < 3.5:
-        patterns.append("Hypoalbuminemia suggests decreased synthetic function - chronic liver disease, malnutrition, or nephrotic syndrome")
+        patterns.append("📉 Hypoalbuminemia suggests decreased synthetic function - chronic liver disease, malnutrition, or nephrotic syndrome")
     
     if 'INR' in tests and tests['INR'] > 1.2:
-        patterns.append("Elevated INR suggests impaired coagulation factor synthesis - severe liver disease or vitamin K deficiency")
+        patterns.append("🔴 Elevated INR suggests impaired coagulation factor synthesis - severe liver disease or vitamin K deficiency")
     
     return patterns
 
@@ -634,29 +527,29 @@ def analyze_kidney_patterns(tests: Dict) -> List[str]:
     if 'Creatinine' in tests:
         creat = tests['Creatinine']
         if creat > 1.2:
-            patterns.append(f"Elevated creatinine ({creat}) suggests reduced GFR")
+            patterns.append(f"🔴 Elevated creatinine ({creat}) suggests reduced GFR")
             
             if 'BUN' in tests:
                 bun = tests['BUN']
                 ratio = bun / creat
                 if ratio > 20:
-                    patterns.append("BUN:Creatinine ratio >20 suggests prerenal azotemia (dehydration, CHF, GI bleeding)")
+                    patterns.append("📊 BUN:Creatinine ratio >20 suggests prerenal azotemia (dehydration, CHF, GI bleeding)")
                 elif ratio < 10:
-                    patterns.append("BUN:Creatinine ratio <10 suggests intrinsic renal disease or liver disease")
+                    patterns.append("📊 BUN:Creatinine ratio <10 suggests intrinsic renal disease or liver disease")
     
     if 'eGFR' in tests:
         egfr = tests['eGFR']
         if egfr < 60:
             stage = "G3a-G5" if egfr < 60 else "G3b" if egfr < 45 else "G4" if egfr < 30 else "G5"
-            patterns.append(f"eGFR {egfr} indicates CKD {stage} - evaluate for complications")
+            patterns.append(f"🔴 eGFR {egfr} indicates CKD {stage} - evaluate for complications")
     
     # Electrolyte disturbances
     if 'Potassium' in tests:
         k = tests['Potassium']
         if k > 5.0:
-            patterns.append(f"Hyperkalemia ({k}) - risk of cardiac arrhythmia, requires urgent management")
+            patterns.append(f"🚨 Hyperkalemia ({k}) - risk of cardiac arrhythmia, requires urgent management")
         elif k < 3.5:
-            patterns.append(f"Hypokalemia ({k}) - consider diuretic use, GI losses, or renal wasting")
+            patterns.append(f"🟡 Hypokalemia ({k}) - consider diuretic use, GI losses, or renal wasting")
     
     return patterns
 
@@ -667,20 +560,16 @@ def analyze_metabolic_patterns(tests: Dict) -> List[str]:
     if 'HbA1c' in tests:
         a1c = tests['HbA1c']
         if a1c >= 6.5:
-            patterns.append(f"HbA1c {a1c}% meets criteria for diabetes mellitus")
+            patterns.append(f"🔴 HbA1c {a1c}% meets criteria for diabetes mellitus")
         elif a1c >= 5.7:
-            patterns.append(f"HbA1c {a1c}% indicates prediabetes - lifestyle intervention recommended")
+            patterns.append(f"🟡 HbA1c {a1c}% indicates prediabetes - lifestyle intervention recommended")
     
     if 'Glucose_Fasting' in tests:
         glucose = tests['Glucose_Fasting']
         if glucose >= 126:
-            patterns.append(f"Fasting glucose {glucose} mg/dL meets diabetes criteria")
+            patterns.append(f"🔴 Fasting glucose {glucose} mg/dL meets diabetes criteria")
         elif glucose >= 100:
-            patterns.append(f"Impaired fasting glucose ({glucose}) - prediabetes")
-    
-    if 'Insulin' in tests and 'Glucose_Fasting' in tests:
-        # HOMA-IR calculation could go here
-        pass
+            patterns.append(f"🟡 Impaired fasting glucose ({glucose}) - prediabetes")
     
     return patterns
 
@@ -694,19 +583,19 @@ def analyze_thyroid_patterns(tests: Dict) -> List[str]:
         if tsh > 4.5:
             if 'Free_T4' in tests:
                 if tests['Free_T4'] < 0.8:
-                    patterns.append("Primary hypothyroidism - elevated TSH with low FT4")
+                    patterns.append("🔴 Primary hypothyroidism - elevated TSH with low FT4")
                 else:
-                    patterns.append("Subclinical hypothyroidism - elevated TSH with normal FT4")
+                    patterns.append("🟡 Subclinical hypothyroidism - elevated TSH with normal FT4")
             
             if 'Anti_TPO' in tests and tests['Anti_TPO'] > 35:
-                patterns.append("Positive Anti-TPO suggests autoimmune (Hashimoto's) thyroiditis")
+                patterns.append("📊 Positive Anti-TPO suggests autoimmune (Hashimoto's) thyroiditis")
                 
         elif tsh < 0.4:
             if 'Free_T4' in tests:
                 if tests['Free_T4'] > 1.8:
-                    patterns.append("Primary hyperthyroidism - suppressed TSH with elevated FT4")
+                    patterns.append("🔴 Primary hyperthyroidism - suppressed TSH with elevated FT4")
                 else:
-                    patterns.append("Subclinical hyperthyroidism - suppressed TSH with normal FT4")
+                    patterns.append("🟡 Subclinical hyperthyroidism - suppressed TSH with normal FT4")
     
     return patterns
 
@@ -715,16 +604,16 @@ def analyze_lipid_patterns(tests: Dict) -> List[str]:
     patterns = []
     
     if 'LDL' in tests and tests['LDL'] > 100:
-        patterns.append(f"Elevated LDL ({tests['LDL']}) - increased cardiovascular risk")
+        patterns.append(f"🟡 Elevated LDL ({tests['LDL']}) - increased cardiovascular risk")
     
     if 'HDL' in tests and tests['HDL'] < 40:
-        patterns.append("Low HDL - cardiovascular risk factor")
+        patterns.append("🟡 Low HDL - cardiovascular risk factor")
     
     if 'Triglycerides' in tests and tests['Triglycerides'] > 150:
         if tests['Triglycerides'] > 500:
-            patterns.append(f"Severe hypertriglyceridemia ({tests['Triglycerides']}) - pancreatitis risk")
+            patterns.append(f"🔴 Severe hypertriglyceridemia ({tests['Triglycerides']}) - pancreatitis risk")
         else:
-            patterns.append("Elevated triglycerides - metabolic syndrome component")
+            patterns.append("🟡 Elevated triglycerides - metabolic syndrome component")
     
     return patterns
 
@@ -734,21 +623,21 @@ def analyze_rheumatology_patterns(tests: Dict) -> List[str]:
     
     # Rheumatoid Arthritis
     if 'RF' in tests and tests['RF'] > 20:
-        patterns.append("Positive RF supports rheumatoid arthritis diagnosis")
+        patterns.append("📊 Positive RF supports rheumatoid arthritis diagnosis")
     if 'Anti_CCP' in tests and tests['Anti_CCP'] > 20:
-        patterns.append("Anti-CCP positive - highly specific for rheumatoid arthritis")
+        patterns.append("📊 Anti-CCP positive - highly specific for rheumatoid arthritis")
     
     # Lupus
     if 'ANA' in tests:
-        patterns.append("Positive ANA - if clinically suspected, check specific autoantibodies (dsDNA, Sm, RNP)")
+        patterns.append("📊 Positive ANA - if clinically suspected, check specific autoantibodies (dsDNA, Sm, RNP)")
     if 'dsDNA' in tests and isinstance(tests['dsDNA'], (int, float)) and tests['dsDNA'] > 100:
-        patterns.append("Elevated anti-dsDNA - specific for systemic lupus erythematosus")
+        patterns.append("🔴 Elevated anti-dsDNA - specific for systemic lupus erythematosus")
     
     # Inflammation
     if 'ESR' in tests and tests['ESR'] > 20:
-        patterns.append(f"Elevated ESR ({tests['ESR']}) indicates active inflammation")
+        patterns.append(f"📊 Elevated ESR ({tests['ESR']}) indicates active inflammation")
     if 'CRP' in tests and tests['CRP'] > 10:
-        patterns.append(f"Elevated CRP ({tests['CRP']}) suggests acute inflammation or infection")
+        patterns.append(f"📊 Elevated CRP ({tests['CRP']}) suggests acute inflammation or infection")
     
     return patterns
 
@@ -760,7 +649,7 @@ def generate_differential_diagnosis(categorized_tests: Dict, gender: str, age: i
     if 'Hematology' in categorized_tests:
         heme = categorized_tests['Hematology']
         
-        if 'Blasts' in heme and heme['Blasts'] > 5:
+        if 'Blasts' in heme and isinstance(heme['Blasts'], (int, float)) and heme['Blasts'] > 5:
             diagnoses.append({
                 'condition': 'Acute Leukemia',
                 'probability': 'High',
@@ -769,7 +658,7 @@ def generate_differential_diagnosis(categorized_tests: Dict, gender: str, age: i
                 'next_step': 'Urgent hematology referral, bone marrow biopsy, flow cytometry'
             })
         
-        if 'Hemoglobin' in heme and heme['Hemoglobin'] < 7:
+        if 'Hemoglobin' in heme and isinstance(heme['Hemoglobin'], (int, float)) and heme['Hemoglobin'] < 7:
             diagnoses.append({
                 'condition': 'Severe Anemia',
                 'probability': 'Confirmed',
@@ -782,7 +671,7 @@ def generate_differential_diagnosis(categorized_tests: Dict, gender: str, age: i
     if 'Metabolic' in categorized_tests:
         metab = categorized_tests['Metabolic']
         
-        if 'HbA1c' in metab and metab['HbA1c'] >= 6.5:
+        if 'HbA1c' in metab and isinstance(metab['HbA1c'], (int, float)) and metab['HbA1c'] >= 6.5:
             diagnoses.append({
                 'condition': 'Diabetes Mellitus',
                 'probability': 'High',
@@ -795,7 +684,7 @@ def generate_differential_diagnosis(categorized_tests: Dict, gender: str, age: i
     if 'Kidney_Function' in categorized_tests:
         renal = categorized_tests['Kidney_Function']
         
-        if 'eGFR' in renal and renal['eGFR'] < 30:
+        if 'eGFR' in renal and isinstance(renal['eGFR'], (int, float)) and renal['eGFR'] < 30:
             diagnoses.append({
                 'condition': 'Stage 4-5 Chronic Kidney Disease',
                 'probability': 'High',
@@ -808,7 +697,7 @@ def generate_differential_diagnosis(categorized_tests: Dict, gender: str, age: i
     if 'Liver_Function' in categorized_tests:
         liver = categorized_tests['Liver_Function']
         
-        if 'Total_Bilirubin' in liver and liver['Total_Bilirubin'] > 3:
+        if 'Total_Bilirubin' in liver and isinstance(liver['Total_Bilirubin'], (int, float)) and liver['Total_Bilirubin'] > 3:
             diagnoses.append({
                 'condition': 'Jaundice/Hepatic Dysfunction',
                 'probability': 'High',
@@ -829,30 +718,110 @@ def generate_recommendations(categorized_tests: Dict, diagnoses: List[Dict]) -> 
             if test in CRITICAL_VALUES and isinstance(value, (int, float)):
                 low, high = CRITICAL_VALUES[test]
                 if value < low or value > high:
-                    recommendations.append(f"URGENT: Critical {test} value ({value}) - immediate physician notification required")
+                    recommendations.append(f"🚨 URGENT: Critical {test} value ({value}) - immediate physician notification required")
     
     # Diagnosis-specific recommendations
     for dx in diagnoses:
-        recommendations.append(f"{dx['next_step']}")
+        recommendations.append(f"📋 {dx['next_step']}")
     
     # Category-specific follow-up
     if 'Hematology' in categorized_tests:
-        recommendations.append("Peripheral blood smear review if not already performed")
+        recommendations.append("🔬 Peripheral blood smear review if not already performed")
     
     if 'Liver_Function' in categorized_tests:
-        recommendations.append("Consider abdominal imaging if liver enzymes elevated >3x ULN")
+        recommendations.append("🔬 Consider abdominal imaging if liver enzymes elevated >3x ULN")
     
     if 'Kidney_Function' in categorized_tests:
-        recommendations.append("Monitor electrolytes closely if eGFR <60")
+        recommendations.append("🔬 Monitor electrolytes closely if eGFR <60")
     
     return list(dict.fromkeys(recommendations))  # Remove duplicates
 
+def generate_comprehensive_analysis(categorized_tests: Dict, gender: str, age: int) -> Dict:
+    """Generate comprehensive analysis"""
+    analysis = {
+        'summary': [],
+        'categories': {},
+        'diagnoses': [],
+        'next_steps': [],
+        'critical_alerts': []
+    }
+    
+    # Check critical values
+    all_values = {}
+    for cat_tests in categorized_tests.values():
+        all_values.update(cat_tests)
+    
+    criticals = check_critical_values(all_values)
+    if criticals:
+        analysis['critical_alerts'] = criticals
+    
+    # Category-specific analysis
+    category_analyzers = {
+        'Hematology': analyze_hematology_patterns,
+        'Liver_Function': analyze_liver_patterns,
+        'Kidney_Function': analyze_kidney_patterns,
+        'Metabolic': analyze_metabolic_patterns,
+        'Endocrine': analyze_thyroid_patterns,
+        'Lipid_Profile': analyze_lipid_patterns,
+        'Immunology_Rheumatology': analyze_rheumatology_patterns
+    }
+    
+    for category, tests in categorized_tests.items():
+        if not tests or category not in category_analyzers:
+            continue
+        
+        patterns = category_analyzers[category](tests)
+        
+        # Count abnormalities
+        abnormalities = []
+        for test, value in tests.items():
+            if isinstance(value, (int, float)) and test in REFERENCE_RANGES:
+                ref = REFERENCE_RANGES[test]
+                if 'male' in ref and 'female' in ref:
+                    low, high = ref[gender]
+                else:
+                    low, high = ref['range']
+                
+                if value < low or value > high:
+                    abnormalities.append({
+                        'test': test,
+                        'value': value,
+                        'direction': 'low' if value < low else 'high'
+                    })
+        
+        analysis['categories'][category] = {
+            'patterns': patterns,
+            'abnormalities': abnormalities
+        }
+        
+        if abnormalities:
+            analysis['summary'].append(f"{category.replace('_', ' ')}: {len(abnormalities)} abnormal parameters")
+    
+    # Cross-category analysis
+    analysis['diagnoses'] = generate_differential_diagnosis(categorized_tests, gender, age)
+    analysis['next_steps'] = generate_recommendations(categorized_tests, analysis['diagnoses'])
+    
+    # RAG enhancement if available
+    if rag_system and hasattr(rag_system, 'enhance_analysis'):
+        try:
+            rag_insights = rag_system.enhance_analysis(categorized_tests, analysis)
+            analysis['rag_insights'] = rag_insights
+        except:
+            analysis['rag_insights'] = "RAG analysis temporarily unavailable"
+    else:
+        analysis['rag_insights'] = "RAG system not initialized - running rule-based analysis only"
+    
+    return analysis
+
 def main():
     st.markdown('<h1 class="main-header">🧬 MedLab AI Analyzer</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Comprehensive Blood Investigation Analysis with RAG-Enhanced Intelligence</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Comprehensive Blood Investigation Analysis with AI-Powered Intelligence</p>', unsafe_allow_html=True)
     
     # RAG Status indicator
-    st.markdown('<div class="rag-status">🧠 RAG Active</div>', unsafe_allow_html=True)
+    if rag_system:
+        st.markdown('<div class="rag-status">🧠 RAG Active</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="rag-status" style="background: #f59e0b;">⚡ Basic Mode</div>', unsafe_allow_html=True)
     
     # Sidebar
     with st.sidebar:
@@ -861,11 +830,11 @@ def main():
         age = st.number_input("Age", min_value=0, max_value=120, value=35)
         
         st.header("Data Input")
-        input_method = st.radio("Input Method", ["Upload Document", "Manual Entry", "Lab Interface"])
+        input_method = st.radio("Input Method", ["Upload Document", "Manual Entry"])
         
         if input_method == "Upload Document":
             uploaded_file = st.file_uploader("Upload Lab Report", 
-                                           type=['pdf', 'png', 'jpg', 'jpeg', 'txt'])
+                                           type=['pdf', 'png', 'jpg', 'jpeg'])
             
             if uploaded_file and st.button("🔍 Extract Data"):
                 with st.spinner("Processing document with OCR..."):
@@ -878,7 +847,6 @@ def main():
         st.header("Analysis Options")
         analysis_depth = st.select_slider("Analysis Depth", 
                                         options=["Screening", "Standard", "Comprehensive", "Academic"])
-        include_rag = st.checkbox("Enable RAG Enhancement", value=True)
         generate_report = st.button("📊 Generate Full Report")
     
     # Main content area
@@ -948,16 +916,15 @@ def main():
                             if cat_analysis['abnormalities']:
                                 st.markdown("**Abnormal Parameters:**")
                                 for abnorm in cat_analysis['abnormalities']:
-                                    severity_color = {"mild": "🟡", "moderate": "🟠", "severe": "🔴"}
-                                    st.markdown(f"{severity_color[abnorm['severity']]} **{abnorm['test']}**: {abnorm['value']} ({abnorm['direction']}, {abnorm['severity']})")
+                                    st.markdown(f"- **{abnorm['test']}**: {abnorm['value']} ({abnorm['direction']})")
                 
                 # RAG insights
-                if include_rag and 'rag_insights' in analysis:
-                    with st.expander("🧠 AI-Enhanced Insights (RAG)", expanded=True):
+                if 'rag_insights' in analysis:
+                    with st.expander("🧠 AI-Enhanced Insights", expanded=True):
                         st.markdown(analysis['rag_insights'])
         
         with tab3:
-            if 'analysis' in locals() and analysis['diagnoses']:
+            if analysis['diagnoses']:
                 st.subheader("Differential Diagnoses")
                 
                 for i, dx in enumerate(analysis['diagnoses']):
@@ -983,14 +950,12 @@ def main():
             if generate_report:
                 st.subheader("Comprehensive Laboratory Report")
                 
-                # Report generation logic here
                 report_data = {
                     'patient_info': {'gender': gender, 'age': age, 'date': datetime.now().strftime('%Y-%m-%d')},
                     'results': st.session_state.parsed_values,
-                    'analysis': analysis if 'analysis' in locals() else {}
+                    'analysis': analysis
                 }
                 
-                # Download option
                 report_json = json.dumps(report_data, indent=2)
                 st.download_button(
                     label="📥 Download Report (JSON)",
@@ -999,16 +964,13 @@ def main():
                     mime="application/json"
                 )
                 
-                # Summary text
                 st.markdown("### Executive Summary")
-                if 'analysis' in locals():
-                    st.write(f"Total parameters analyzed: {len(st.session_state.parsed_values)}")
-                    st.write(f"Abnormal findings: {sum(len(cat.get('abnormalities', [])) for cat in analysis['categories'].values())}")
-                    st.write(f"Critical alerts: {len(analysis['critical_alerts'])}")
-                    st.write(f"Potential diagnoses identified: {len(analysis['diagnoses'])}")
+                st.write(f"Total parameters analyzed: {len(st.session_state.parsed_values)}")
+                st.write(f"Abnormal findings: {sum(len(cat.get('abnormalities', [])) for cat in analysis['categories'].values())}")
+                st.write(f"Critical alerts: {len(analysis['critical_alerts'])}")
+                st.write(f"Potential diagnoses identified: {len(analysis['diagnoses'])}")
 
     else:
-        # Welcome screen
         st.info("👆 Upload a lab report or enter values manually to begin analysis")
         
         col1, col2, col3 = st.columns(3)
