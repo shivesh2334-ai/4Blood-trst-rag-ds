@@ -15,8 +15,7 @@ from typing import Dict, List, Tuple, Optional
 import hashlib
 
 # FIXED: Updated langchain imports for newer versions
-try:
-    # FIXED: Updated langchain imports for newer versions
+# FIXED: Updated langchain imports for newer versions
 try:
     from langchain_community.embeddings import HuggingFaceEmbeddings
     from langchain_community.vectorstores import FAISS
@@ -33,6 +32,11 @@ except ImportError:
     except ImportError:
         # Fallback if langchain not installed
         HuggingFaceEmbeddings = None
+        FAISS = None
+        RecursiveCharacterTextSplitter = None
+        RetrievalQA = None
+        PromptTemplate = None
+
         FAISS = None
         RecursiveCharacterTextSplitter = None
         RetrievalQA = None
