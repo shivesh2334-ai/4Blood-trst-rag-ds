@@ -1,17 +1,18 @@
-streamlit
-pandas
-numpy
-Pillow
-pytesseract
-pdf2image
-opencv-python-headless
+streamlit==1.28.0
+pandas==2.0.3
+numpy==1.24.3
+Pillow==10.0.0
+pytesseract==0.3.10
+pdf2image==1.16.3
+opencv-python-headless==4.8.0.76
 
-# Simplified - just use langchain-community which includes all
-langchain
-langchain-community
-sentence-transformers
-faiss-cpu
-torch
-huggingface-hub
-pypd
-python-dotenv
+# LangChain packages
+langchain>=0.1.0
+langchain-community>=0.0.10
+langchain-text-splitters>=0.0.1
+sentence-transformers==2.2.2
+faiss-cpu==1.7.4
+torch==2.1.0
+huggingface-hub==0.17.3
+pypdf==3.17.0
+python-dotenv==1.0.0
