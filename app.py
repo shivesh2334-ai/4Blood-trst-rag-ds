@@ -43,7 +43,16 @@ except ImportError:
         PromptTemplate = None
 
 
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+try:
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+except ImportError:
+    try:
+        from langchain.schema.document import Document
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+    except ImportError:
+        from langchain_core.documents import Document
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 try:
     from langchain.chains import RetrievalQA
     from langchain.prompts import PromptTemplate
