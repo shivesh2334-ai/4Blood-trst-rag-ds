@@ -7,11 +7,11 @@ pdf2image
 opencv-python-headless
 
 # Simplified - just use langchain-community which includes all
-langchain>=0.1.0
-langchain-community>=0.0.10
-sentence-transformers==2.2.2
-faiss-cpu==1.7.4
-torch==2.1.0
-huggingface-hub==0.17.3
-pypdf==3.17.0
-python-dotenv==1.0.0
+langchain
+langchain-community
+sentence-transformers
+faiss-cpu
+torch
+huggingface-hub
+pypd
+python-dotenv
